@@ -1,0 +1,16 @@
+[package]
+name = "tokio-serde-msgpack"
+version = "0.1.0"
+authors = ["Stephen Weeks <tene@allalone.org>"]
+
+[dependencies]
+tokio-serde = "0.2"
+serde = "1.0"
+futures = "0.1"
+bytes = "0.4"
+rmp-serde = "0.13"
+
+[dev_dependencies]
+serde_derive = "1.0"
+tokio-core = "0.1"
+tokio-io = "0.1"
