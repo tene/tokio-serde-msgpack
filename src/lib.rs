@@ -11,8 +11,6 @@ use tokio_serde::{Serializer, Deserializer, FramedRead, FramedWrite};
 
 use std::marker::PhantomData;
 
-use std::io::Error;
-
 struct MsgPack<T> {
     ghost: PhantomData<T>,
 }
