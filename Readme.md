@@ -9,7 +9,7 @@ To use `tokio-serde-msgpack`, first add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tokio-serde-msgpack = { git = "https://github.com/tene/tokio-serde-msgpack" }
+tokio-serde-msgpack = "0.1"
 ```
 
 Next, add this to your crate:
