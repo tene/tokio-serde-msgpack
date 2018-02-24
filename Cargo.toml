@@ -5,6 +5,7 @@ authors = ["Stephen Weeks <tene@allalone.org>"]
 repository = "https://github.com/tene/tokio-serde-msgpack"
 homepage = "https://github.com/tene/tokio-serde-msgpack"
 documentation = "https://docs.rs/tokio-serde-msgpack"
+license = "Apache-2.0/MIT"
 description = """
 Utilities needed to easily implement a Tokio MsgPack transport using serde for MsgPack serialization and deserialization of frame values.
 """
