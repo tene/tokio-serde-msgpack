@@ -2,23 +2,22 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_msgpack;
+extern crate tokio_stdin_stdout;
 
 #[macro_use]
 extern crate serde_derive;
 extern crate rmp_serde;
 extern crate serde;
 
-use futures::{Future, Sink};
+use futures::{Future, Sink, Stream};
 
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
 
-use serde::{Deserialize, Serialize};
+use tokio_io::codec::{length_delimited, LinesCodec, FramedRead};
+use tokio_io::{AsyncRead, AsyncWrite};
 
-// Use length delimited frames
-use tokio_io::codec::length_delimited;
-
-use tokio_serde_msgpack::WriteMsgPack;
+use tokio_serde_msgpack::{WriteMsgPack, ReadMsgPack};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Hello {
@@ -36,19 +35,29 @@ pub fn main() {
         &handle);
 
     core.run(socket.and_then(|socket| {
+        let (socket_read, socket_write) = socket.split();
 
-        // Delimit frames using a length header
-        let length_delimited = length_delimited::FramedWrite::new(socket);
+        let delimited_write = length_delimited::FramedWrite::new(socket_write);
+        let serialized = WriteMsgPack::new(delimited_write);
 
-        // Serialize frames with MsgPack
-        let serialized = WriteMsgPack::new(length_delimited);
+        let delimited_read = length_delimited::FramedRead::new(socket_read);
+        let deserialized = ReadMsgPack::<_, Hello>::new(delimited_read)
+            .map_err(|e| println!("ERR: {:?}", e));
 
-        let hi = Hello {
-            id: 42,
-            name: "Client Forty Two".to_owned(),
-        };
+        handle.spawn(deserialized.for_each(|msg| {
+            println!("GOT: {:?}", msg);
+            Ok(())
+        }));
 
-        // Send the value
-        serialized.send(hi)
+        let stdin = tokio_stdin_stdout::stdin(0);
+        let lines_in = FramedRead::new(stdin, LinesCodec::new());
+
+        let send_greetings = lines_in.map(|l| {
+            Hello {
+                id: 42,
+                name: l,
+            }
+        }).forward(serialized);
+        send_greetings
     })).unwrap();
 }

@@ -1,6 +1,6 @@
 [package]
 name = "tokio-serde-msgpack"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Stephen Weeks <tene@allalone.org>"]
 repository = "https://github.com/tene/tokio-serde-msgpack"
 homepage = "https://github.com/tene/tokio-serde-msgpack"
@@ -21,3 +21,4 @@ rmp-serde = "0.13"
 serde_derive = "1.0"
 tokio-core = "0.1"
 tokio-io = "0.1"
+tokio-stdin-stdout = "0.1"
