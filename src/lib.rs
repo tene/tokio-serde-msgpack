@@ -1,16 +1,131 @@
-extern crate futures;
 extern crate bytes;
-extern crate serde;
+extern crate futures_core;
+extern crate futures_sink;
 extern crate rmp_serde;
-extern crate tokio_serde;
+extern crate serde;
+extern crate tokio_io;
 
-use futures::{Stream, Poll, Sink, StartSend};
-use bytes::{Bytes, BytesMut, Buf, IntoBuf};
-use serde::{Serialize, Deserialize};
-use tokio_serde::{Serializer, Deserializer, FramedRead, FramedWrite};
+use bytes::{BufMut, BytesMut};
+use rmp_serde::Deserializer;
+use serde::{Deserialize, Serialize};
+use tokio_io::codec::{Decoder, Encoder, FramedRead, FramedWrite};
+use tokio_io::{AsyncRead, AsyncWrite};
 
+use std::io;
 use std::marker::PhantomData;
 
+pub type MsgPackReader<'lt, T, R> =
+    tokio_io::codec::FramedRead<tokio_io::io::ReadHalf<T>, MsgPackDecoder<'lt, R>>;
+pub type MsgPackWriter<T, S> =
+    tokio_io::codec::FramedWrite<tokio_io::io::WriteHalf<T>, MsgPackEncoder<S>>;
+
+pub fn from_io<'lt, T, R, S>(io: T) -> (MsgPackReader<'lt, T, R>, MsgPackWriter<T, S>)
+where
+    T: AsyncRead + AsyncWrite,
+    R: Deserialize<'lt>,
+    S: Serialize,
+{
+    let (rx, tx) = io.split();
+    let rx2 = FramedRead::new(rx, MsgPackDecoder::<'lt, R>::new());
+    let tx2 = FramedWrite::new(tx, MsgPackEncoder::<S>::new());
+    (rx2, tx2)
+}
+
+pub struct MsgPackDecoder<'de, T: 'de>
+where
+    T: Deserialize<'de>,
+{
+    ghost: PhantomData<&'de T>,
+}
+
+impl<'de, T> MsgPackDecoder<'de, T>
+where
+    T: Deserialize<'de>,
+{
+    pub fn new() -> Self {
+        MsgPackDecoder { ghost: PhantomData }
+    }
+}
+
+impl<'de, T> Decoder for MsgPackDecoder<'de, T>
+where
+    T: Deserialize<'de>,
+{
+    type Item = T;
+    type Error = io::Error;
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<T>, io::Error> {
+        Deserialize::deserialize(&mut Deserializer::new(&buf[..]))
+            .map_err(|_e| io::Error::from(io::ErrorKind::InvalidData))
+    }
+}
+
+pub struct MsgPackEncoder<T>
+where
+    T: Serialize,
+{
+    ghost: PhantomData<T>,
+}
+
+impl<T> MsgPackEncoder<T>
+where
+    T: Serialize,
+{
+    pub fn new() -> Self {
+        MsgPackEncoder { ghost: PhantomData }
+    }
+}
+
+impl<T> Encoder for MsgPackEncoder<T>
+where
+    T: Serialize,
+{
+    type Item = T;
+    type Error = io::Error;
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        rmp_serde::to_vec(&item)
+            .map(|buf| {
+                dst.reserve(buf.len());
+                dst.put(buf);
+            })
+            .map_err(|_e| io::Error::from(io::ErrorKind::InvalidData))
+    }
+}
+
+pub struct MsgPackCodec<'de, R: 'de, S>
+where
+    R: Deserialize<'de>,
+    S: Serialize,
+{
+    ghost: PhantomData<(&'de R, S)>,
+}
+
+impl<'de, R, S> Encoder for MsgPackCodec<'de, R, S>
+where
+    R: Deserialize<'de>,
+    S: Serialize,
+{
+    type Item = S;
+    type Error = io::Error;
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let mut enc = MsgPackEncoder { ghost: PhantomData };
+        enc.encode(item, dst)
+    }
+}
+
+impl<'de, R, S> Decoder for MsgPackCodec<'de, R, S>
+where
+    R: Deserialize<'de>,
+    S: Serialize,
+{
+    type Item = R;
+    type Error = io::Error;
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<R>, io::Error> {
+        let mut dec = MsgPackDecoder { ghost: PhantomData };
+        dec.decode(buf)
+    }
+}
+
+/*
 struct MsgPack<T> {
     ghost: PhantomData<T>,
 }
@@ -79,8 +194,8 @@ impl<T, U> Stream for ReadMsgPack<T, U>
     type Item = U;
     type Error = T::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.inner.poll()
+    fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
+        self.inner.poll_next(cx)
     }
 }
 
@@ -91,16 +206,18 @@ impl<T, U> Sink for ReadMsgPack<T, U>
     type SinkError = T::SinkError;
 
     fn start_send(&mut self, item: T::SinkItem)
-                  -> StartSend<T::SinkItem, T::SinkError> {
+                  -> Result<(), T::SinkError> {
         self.get_mut().start_send(item)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), T::SinkError> {
-        self.get_mut().poll_complete()
+    fn poll_close(&mut self, cx: &mut Context) -> Poll<(), T::SinkError> {
+        self.get_mut().poll_close(cx)
     }
-
-    fn close(&mut self) -> Poll<(), T::SinkError> {
-        self.get_mut().close()
+    fn poll_ready(&mut self, cx: &mut Context) -> Poll<(), T::SinkError> {
+        self.get_mut().poll_ready(cx)
+    }
+    fn poll_flush(&mut self, cx: &mut Context) -> Poll<(), T::SinkError> {
+        self.get_mut().poll_flush(cx)
     }
 }
 
@@ -138,8 +255,8 @@ impl<T, U> Stream for WriteMsgPack<T, U>
     type Item = T::Item;
     type Error = T::Error;
 
-    fn poll(&mut self) -> Poll<Option<T::Item>, T::Error> {
-        self.get_mut().poll()
+    fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
+        self.inner.poll_next(cx)
     }
 }
 
@@ -151,15 +268,19 @@ impl<T, U> Sink for WriteMsgPack<T, U>
     type SinkItem = U;
     type SinkError = T::SinkError;
 
-    fn start_send(&mut self, item: U) -> StartSend<U, T::SinkError> {
-        self.inner.start_send(item)
+    fn start_send(&mut self, item: T::SinkItem)
+                  -> Result<(), T::SinkError> {
+        self.get_mut().start_send(item)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), T::SinkError> {
-        self.inner.poll_complete()
+    fn poll_close(&mut self, cx: &mut Context) -> Poll<(), T::SinkError> {
+        self.get_mut().poll_close(cx)
     }
-
-    fn close(&mut self) -> Poll<(), T::SinkError> {
-        self.inner.poll_complete()
+    fn poll_ready(&mut self, cx: &mut Context) -> Poll<(), T::SinkError> {
+        self.get_mut().poll_ready(cx)
+    }
+    fn poll_flush(&mut self, cx: &mut Context) -> Poll<(), T::SinkError> {
+        self.get_mut().poll_flush(cx)
     }
 }
+*/

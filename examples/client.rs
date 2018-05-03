@@ -11,13 +11,13 @@ extern crate serde;
 
 use futures::{Future, Sink, Stream};
 
-use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
+use tokio_core::reactor::Core;
 
-use tokio_io::codec::{length_delimited, LinesCodec, FramedRead};
+use tokio_io::codec::{length_delimited, FramedRead, LinesCodec};
 use tokio_io::{AsyncRead, AsyncWrite};
 
-use tokio_serde_msgpack::{WriteMsgPack, ReadMsgPack};
+use tokio_serde_msgpack::{ReadMsgPack, WriteMsgPack};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Hello {
@@ -30,9 +30,7 @@ pub fn main() {
     let handle = core.handle();
 
     // Bind a server socket
-    let socket = TcpStream::connect(
-        &"127.0.0.1:17653".parse().unwrap(),
-        &handle);
+    let socket = TcpStream::connect(&"127.0.0.1:17653".parse().unwrap(), &handle);
 
     core.run(socket.and_then(|socket| {
         let (socket_read, socket_write) = socket.split();
@@ -41,8 +39,8 @@ pub fn main() {
         let serialized = WriteMsgPack::new(delimited_write);
 
         let delimited_read = length_delimited::FramedRead::new(socket_read);
-        let deserialized = ReadMsgPack::<_, Hello>::new(delimited_read)
-            .map_err(|e| println!("ERR: {:?}", e));
+        let deserialized =
+            ReadMsgPack::<_, Hello>::new(delimited_read).map_err(|e| println!("ERR: {:?}", e));
 
         handle.spawn(deserialized.for_each(|msg| {
             println!("GOT: {:?}", msg);
@@ -52,12 +50,9 @@ pub fn main() {
         let stdin = tokio_stdin_stdout::stdin(0);
         let lines_in = FramedRead::new(stdin, LinesCodec::new());
 
-        let send_greetings = lines_in.map(|l| {
-            Hello {
-                id: 42,
-                name: l,
-            }
-        }).forward(serialized);
+        let send_greetings = lines_in
+            .map(|l| Hello { id: 42, name: l })
+            .forward(serialized);
         send_greetings
     })).unwrap();
 }
