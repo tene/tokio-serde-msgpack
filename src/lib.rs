@@ -1,6 +1,5 @@
 extern crate bytes;
-extern crate futures_core;
-extern crate futures_sink;
+extern crate futures;
 extern crate rmp_serde;
 extern crate serde;
 extern crate tokio_io;
@@ -47,15 +46,42 @@ where
     }
 }
 
+#[derive(Debug)]
+pub enum DecodeError {
+    IO(io::Error),
+    Decode(rmp_serde::decode::Error),
+}
+
+impl From<io::Error> for DecodeError {
+    fn from(e: io::Error) -> Self {
+        DecodeError::IO(e)
+    }
+}
+
+impl From<rmp_serde::decode::Error> for DecodeError {
+    fn from(e: rmp_serde::decode::Error) -> Self {
+        DecodeError::Decode(e)
+    }
+}
+
 impl<'de, T> Decoder for MsgPackDecoder<'de, T>
 where
     T: Deserialize<'de>,
 {
     type Item = T;
-    type Error = io::Error;
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<T>, io::Error> {
-        Deserialize::deserialize(&mut Deserializer::new(&buf[..]))
-            .map_err(|_e| io::Error::from(io::ErrorKind::InvalidData))
+    type Error = DecodeError;
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<T>, Self::Error> {
+        if buf.len() == 0 {
+            return Ok(None);
+        }
+        let (pos, rv) = {
+            let mut des = Deserializer::new(io::Cursor::new(&buf[..]));
+            let rv = Deserialize::deserialize(&mut des).map_err(|e| DecodeError::Decode(e));
+            let pos = des.position() as usize;
+            (pos, rv)
+        };
+        buf.split_to(pos);
+        rv
     }
 }
 
@@ -75,22 +101,41 @@ where
     }
 }
 
+#[derive(Debug)]
+pub enum EncodeError {
+    IO(io::Error),
+    Encode(rmp_serde::encode::Error),
+}
+
+impl From<io::Error> for EncodeError {
+    fn from(e: io::Error) -> Self {
+        EncodeError::IO(e)
+    }
+}
+
+impl From<rmp_serde::encode::Error> for EncodeError {
+    fn from(e: rmp_serde::encode::Error) -> Self {
+        EncodeError::Encode(e)
+    }
+}
+
 impl<T> Encoder for MsgPackEncoder<T>
 where
     T: Serialize,
 {
     type Item = T;
-    type Error = io::Error;
+    type Error = EncodeError;
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         rmp_serde::to_vec(&item)
             .map(|buf| {
                 dst.reserve(buf.len());
                 dst.put(buf);
             })
-            .map_err(|_e| io::Error::from(io::ErrorKind::InvalidData))
+            .map_err(|e| EncodeError::Encode(e))
     }
 }
 
+/*
 pub struct MsgPackCodec<'de, R: 'de, S>
 where
     R: Deserialize<'de>,
@@ -124,6 +169,7 @@ where
         dec.decode(buf)
     }
 }
+*/
 
 /*
 struct MsgPack<T> {

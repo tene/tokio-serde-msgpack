@@ -1,6 +1,5 @@
 extern crate futures;
-extern crate tokio_core;
-extern crate tokio_io;
+extern crate tokio;
 extern crate tokio_serde_msgpack;
 
 #[macro_use]
@@ -8,16 +7,10 @@ extern crate serde_derive;
 extern crate rmp_serde;
 extern crate serde;
 
-use futures::sync::mpsc::unbounded;
 use futures::{Future, Sink, Stream};
+use tokio::net::{TcpListener, TcpStream};
 
-use tokio_core::net::TcpListener;
-use tokio_core::reactor::Core;
-
-use tokio_io::codec::length_delimited;
-use tokio_io::AsyncRead;
-
-use tokio_serde_msgpack::{ReadMsgPack, WriteMsgPack};
+use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Hello {
@@ -25,44 +18,42 @@ struct Hello {
     name: String,
 }
 
-pub fn main() {
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
+unsafe impl Send for Hello {}
 
-    // Bind a server socket
-    let listener = TcpListener::bind(&"127.0.0.1:17653".parse().unwrap(), &handle).unwrap();
+pub fn main() {
+    let listener = TcpListener::bind(&"127.0.0.1:17653".parse().unwrap()).unwrap();
 
     println!("listening on {:?}", listener.local_addr());
 
-    core.run(listener.incoming().for_each(|(socket, _)| {
-        let (socket_read, socket_write) = socket.split();
-        let (tx, rx) = unbounded::<Hello>();
+    let server = listener
+        .incoming()
+        .for_each(|socket| {
+            println!("New client connection!");
+            let (deserialized, serialized): (
+                MsgPackReader<TcpStream, Hello>,
+                MsgPackWriter<TcpStream, Hello>,
+            ) = from_io(socket);
 
-        let delimited_write = length_delimited::FramedWrite::new(socket_write);
-        let serialized = WriteMsgPack::<_, Hello>::new(delimited_write).sink_map_err(|e| {
-            println!("WRITE ERR: {:?}", e);
-            ()
-        });
+            let deserialized = deserialized.map_err(|e| println!("ERR: {:#?}", e));
+            let serialized = serialized.sink_map_err(|e| println!("ERR: {:#?}", e));
 
-        let delimited_read = length_delimited::FramedRead::new(socket_read);
-        let deserialized =
-            ReadMsgPack::<_, Hello>::new(delimited_read).map_err(|e| println!("READ ERR: {:?}", e));
+            // Spawn a task that prints all received messages to STDOUT
+            let handle_conn = deserialized
+                .map(move |msg| {
+                    println!("RX: {:#?}", msg);
+                    Hello {
+                        id: msg.id,
+                        name: format!("server: {}", msg.name),
+                    }
+                })
+                .forward(serialized)
+                .then(|_| Ok(()));
 
-        handle.spawn(rx.forward(serialized).and_then(|(_, mut s)| Ok(())));
+            tokio::spawn(handle_conn);
 
-        let hi = Hello {
-            id: 137,
-            name: "Server".to_owned(),
-        };
-        tx.unbounded_send(hi);
-
-        // Spawn a task that prints all received messages to STDOUT
-        handle.spawn(deserialized.for_each(move |msg| {
-            println!("GOT: {:?}", msg);
-            tx.unbounded_send(msg);
             Ok(())
-        }));
+        })
+        .map_err(|e| println!("ERR: {:#?}", e));
 
-        Ok(())
-    })).unwrap();
+    tokio::run(server);
 }
