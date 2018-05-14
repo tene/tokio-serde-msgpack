@@ -5,6 +5,7 @@ extern crate serde;
 extern crate tokio_io;
 
 use bytes::{BufMut, BytesMut};
+use rmp_serde::decode;
 use rmp_serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use tokio_io::codec::{Decoder, Encoder, FramedRead, FramedWrite};
@@ -77,6 +78,12 @@ where
         let (pos, rv) = {
             let mut des = Deserializer::new(io::Cursor::new(&buf[..]));
             let rv = Deserialize::deserialize(&mut des).map_err(|e| DecodeError::Decode(e));
+            // XXX Ugh, this is ugly, there's got to be a better way to handle this
+            if let Err(DecodeError::Decode(decode::Error::InvalidDataRead(ref custom))) = rv {
+                if custom.kind() == io::ErrorKind::UnexpectedEof {
+                    return Ok(None);
+                }
+            }
             let pos = des.position() as usize;
             (pos, rv)
         };
