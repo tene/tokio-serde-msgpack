@@ -7,7 +7,7 @@ extern crate serde_derive;
 extern crate rmp_serde;
 extern crate serde;
 
-use futures::{Future, Sink, Stream};
+use futures::{future, SinkExt, StreamExt, TryStreamExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
@@ -20,14 +20,16 @@ struct Hello {
 
 unsafe impl Send for Hello {}
 
-pub fn main() {
-    let listener = TcpListener::bind(&"127.0.0.1:17653".parse().unwrap()).unwrap();
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let mut listener = TcpListener::bind("127.0.0.1:17653").await?;
 
-    println!("listening on {:?}", listener.local_addr());
+    println!("listening on {:?}", listener.local_addr().unwrap());
 
-    let server = listener
+    listener
         .incoming()
-        .for_each(|socket| {
+        .for_each(|result| {
+            let socket = result.unwrap();
             println!("New client connection!");
             let (deserialized, serialized): (
                 MsgPackReader<TcpStream, Hello>,
@@ -39,21 +41,20 @@ pub fn main() {
 
             // Spawn a task that prints all received messages to STDOUT
             let handle_conn = deserialized
-                .map(move |msg| {
+                .map(move |result| {
+                    let msg = result.unwrap();
                     println!("RX: {:#?}", msg);
-                    Hello {
+                    Ok(Hello {
                         id: msg.id,
                         name: format!("server: {}", msg.name),
-                    }
+                    })
                 })
-                .forward(serialized)
-                .then(|_| Ok(()));
+                .forward(serialized);
 
             tokio::spawn(handle_conn);
-
-            Ok(())
+            future::ready(())
         })
-        .map_err(|e| println!("ERR: {:#?}", e));
+        .await;
 
-    tokio::run(server);
+    Ok(())
 }

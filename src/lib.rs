@@ -2,22 +2,21 @@ extern crate bytes;
 extern crate futures;
 extern crate rmp_serde;
 extern crate serde;
-extern crate tokio_io;
+extern crate tokio;
+extern crate tokio_util;
 
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use rmp_serde::decode;
 use rmp_serde::Deserializer;
 use serde::{Deserialize, Serialize};
-use tokio_io::codec::{Decoder, Encoder, FramedRead, FramedWrite};
-use tokio_io::{AsyncRead, AsyncWrite};
+use tokio::io::{split, AsyncRead, AsyncWrite};
+use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 
 use std::io;
 use std::marker::PhantomData;
 
-pub type MsgPackReader<'lt, T, R> =
-    tokio_io::codec::FramedRead<tokio_io::io::ReadHalf<T>, MsgPackDecoder<'lt, R>>;
-pub type MsgPackWriter<T, S> =
-    tokio_io::codec::FramedWrite<tokio_io::io::WriteHalf<T>, MsgPackEncoder<S>>;
+pub type MsgPackReader<'lt, T, R> = FramedRead<tokio::io::ReadHalf<T>, MsgPackDecoder<'lt, R>>;
+pub type MsgPackWriter<T, S> = FramedWrite<tokio::io::WriteHalf<T>, MsgPackEncoder<S>>;
 
 pub fn from_io<'lt, T, R, S>(io: T) -> (MsgPackReader<'lt, T, R>, MsgPackWriter<T, S>)
 where
@@ -25,7 +24,7 @@ where
     R: Deserialize<'lt>,
     S: Serialize,
 {
-    let (rx, tx) = io.split();
+    let (rx, tx) = split(io);
     let rx2 = FramedRead::new(rx, MsgPackDecoder::<'lt, R>::new());
     let tx2 = FramedWrite::new(tx, MsgPackEncoder::<S>::new());
     (rx2, tx2)
@@ -87,7 +86,7 @@ where
             let pos = des.position() as usize;
             (pos, rv)
         };
-        buf.split_to(pos);
+        buf.advance(pos);
         rv
     }
 }
@@ -126,17 +125,16 @@ impl From<rmp_serde::encode::Error> for EncodeError {
     }
 }
 
-impl<T> Encoder for MsgPackEncoder<T>
+impl<T> Encoder<T> for MsgPackEncoder<T>
 where
     T: Serialize,
 {
-    type Item = T;
     type Error = EncodeError;
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: T, dst: &mut BytesMut) -> Result<(), Self::Error> {
         rmp_serde::to_vec(&item)
             .map(|buf| {
                 dst.reserve(buf.len());
-                dst.put(buf);
+                dst.put(buf.as_slice());
             })
             .map_err(|e| EncodeError::Encode(e))
     }
