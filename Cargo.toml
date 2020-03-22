@@ -2,6 +2,7 @@
 name = "tokio-serde-msgpack"
 version = "0.2.0"
 authors = ["Stephen Weeks <tene@allalone.org>"]
+edition = "2018"
 repository = "https://github.com/tene/tokio-serde-msgpack"
 homepage = "https://github.com/tene/tokio-serde-msgpack"
 documentation = "https://docs.rs/tokio-serde-msgpack"
@@ -11,13 +12,13 @@ Utilities needed to easily implement a Tokio MsgPack transport using serde for M
 """
 
 [dependencies]
-serde = "1.0"
-futures = "0.1"
-bytes = "0.4"
-rmp-serde = "0.13"
-tokio-io = "0.1"
+serde = "1.0.105"
+futures = "0.3.4"
+bytes = "0.5.4"
+rmp-serde = "0.14.3"
+tokio-io = "0.1.13"
+tokio = { version = "0.2.13", features = ["full"] }
+tokio-util = { version = "0.3.1", features = ["codec"] }
 
 [dev_dependencies]
 serde_derive = "1.0"
-tokio = "0.1.6"
-tokio-stdin-stdout = "0.1"

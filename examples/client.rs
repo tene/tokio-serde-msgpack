@@ -2,16 +2,15 @@ extern crate futures;
 extern crate tokio;
 extern crate tokio_io;
 extern crate tokio_serde_msgpack;
-extern crate tokio_stdin_stdout;
 
 #[macro_use]
 extern crate serde_derive;
 extern crate rmp_serde;
 extern crate serde;
 
-use futures::{Future, Sink, Stream};
+use futures::{future, SinkExt, StreamExt, TryStreamExt};
 use tokio::net::TcpStream;
-use tokio_io::codec::{FramedRead, LinesCodec};
+use tokio_util::codec::{FramedRead, LinesCodec};
 
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 
@@ -21,37 +20,34 @@ struct Hello {
     name: String,
 }
 
-pub fn main() {
-    let blah = TcpStream::connect(&"127.0.0.1:17653".parse().unwrap());
+#[tokio::main]
+async fn main() {
+    let socket = TcpStream::connect("127.0.0.1:17653").await.unwrap();
 
-    let client = blah.map(move |socket| {
-        println!("Connected!");
-        let (deserialized_err, serialized): (
-            MsgPackReader<TcpStream, Hello>,
-            MsgPackWriter<TcpStream, Hello>,
-        ) = from_io(socket);
-        let deserialized = deserialized_err.map_err(|e| println!("ERR: {:#?}", e));
+    println!("Connected!");
+    let (deserialized_err, mut serialized): (
+        MsgPackReader<TcpStream, Hello>,
+        MsgPackWriter<TcpStream, Hello>,
+    ) = from_io(socket);
+    let deserialized = deserialized_err.map_err(|e| println!("ERR: {:#?}", e));
 
-        tokio::spawn(
-            deserialized
-                .for_each(|msg| {
-                    println!("GOT: {:?}", msg);
-                    Ok(())
-                })
-                .map_err(|e| println!("ERR: {:#?}", e)),
-        );
+    tokio::spawn(deserialized.for_each(|msg| {
+        println!("GOT: {:?}", msg);
+        future::ready(())
+    }));
 
-        let stdin = tokio_stdin_stdout::stdin(0);
-        let lines_in = FramedRead::new(stdin, LinesCodec::new());
+    let lines_in = FramedRead::new(tokio::io::stdin(), LinesCodec::new());
 
-        let mut counter = 0;
-        let greetings = lines_in.map(move |l| {
-            counter = counter + 1;
-            Hello { id: counter, name: l }
-        });
+    let mut counter = 0;
+    let mut greetings = lines_in.map(move |result| {
+        let line = result.unwrap();
+        counter = counter + 1;
+        Ok(Hello {
+            id: counter,
+            name: line,
+        })
+    });
 
-        let send_greetings = serialized.send_all(greetings).then(|_| Ok(()));
-        tokio::spawn(send_greetings);
-    }).map_err(|e| println!("ERR: {:#?}", e));
-    tokio::run(client);
+    let send_greetings = serialized.send_all(&mut greetings);
+    send_greetings.await.unwrap();
 }
